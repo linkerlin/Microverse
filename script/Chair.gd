@@ -60,14 +60,8 @@ func sit_character(character: CharacterBody2D):
 	character.global_position = global_position + sit_position
 	
 	# 根据坐姿调整Z轴顺序
-	if sit_direction == "up":
-		# 角色在椅子后面
-		character.z_index = base_z_index  # 角色保持在基础层
-		z_index = base_z_index + 1  # 椅子移到角色上面
-	else:
-		# 角色在椅子前面
-		character.z_index = base_z_index + 1  # 角色在椅子前面
-		z_index = base_z_index  # 椅子保持原位
+	character.z_index = base_z_index + 1
+	z_index = base_z_index
 	
 	return true
 

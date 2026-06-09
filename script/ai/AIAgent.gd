@@ -20,6 +20,11 @@ var current_state = State.IDLE
 # 是否由玩家控制
 var is_player_controlled = false
 
+# Agentic 子系统(Gen 2)
+var _sandbox: AgentSandbox = null
+var _tool_registry: RefCounted = null  # 实际类型为 ToolRegistry，声明为 RefCounted 以便测试注入 fake
+var _memory_mgr_node = null  # 引用 MemoryManager 单例，便于测试注入 fake
+
 # 角色节点引用
 @onready var character = get_parent()
 @onready var character_controller = character
@@ -56,6 +61,9 @@ func _ready():
 	add_child(initial_delay)
 	initial_delay.timeout.connect(func(): make_decision())
 	initial_delay.start()
+	
+	# 初始化 MemoryManager 引用（便于测试注入 fake）
+	_memory_mgr_node = get_node_or_null("/root/MemoryManager")
 
 # 切换玩家控制状态
 func toggle_player_control(enabled: bool):
@@ -67,6 +75,36 @@ func toggle_player_control(enabled: bool):
 	else:
 		# 恢复AI决策
 		decision_timer.start()
+
+# 执行玩家指令（由 RadialMenu 调用）
+# 中断当前行动，立即执行玩家下达的指令
+func execute_player_command(tool_name: String, args: Dictionary) -> Dictionary:
+	if not _tool_registry:
+		print("[AIAgent] ToolRegistry 未初始化")
+		return {"ok": false, "error": "tool_registry_not_initialized"}
+
+	# 中断当前行动：清空导航路径，停止当前动画
+	if character and character.has_method("stop_movement"):
+		character.stop_movement()
+	elif character and character.has_method("move_to"):
+		# 清空导航路径（假设 CharacterController 有 navigation_path）
+		if "navigation_path" in character:
+			character.navigation_path = []
+
+	# 执行指令
+	var result: Dictionary = _tool_registry.execute(tool_name, args)
+
+	# 记录玩家指令到记忆
+	if result.get("ok", false) and _memory_mgr_node:
+		_memory_mgr_node.add_memory(
+			character,
+			"玩家下达了指令：%s，参数：%s" % [tool_name, JSON.stringify(args)],
+			MemoryManager.MemoryType.TASK,
+			MemoryManager.MemoryImportance.NORMAL
+		)
+
+	return result
+
 
 # 定时器超时时进行决策
 func _on_decision_timer_timeout():
@@ -269,10 +307,6 @@ func get_object_info(obj: Node2D) -> String:
 
 # 标记是否正在等待API响应
 var waiting_responses = {}
-
-# Agentic 子系统(Gen 2)
-var _sandbox: AgentSandbox = null
-var _tool_registry: ToolRegistry = null
 
 # 获取角色详细状态信息
 func get_character_status_info(char_node = null) -> String:

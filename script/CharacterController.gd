@@ -338,14 +338,14 @@ func sit_on_chair(chair):
 		target_position = Vector2.ZERO
 		velocity = Vector2.ZERO
 		facing_direction = chair.sit_direction
-		
+
 		# 播放对应方向的坐下动画
 		var anim_name = "sit_" + facing_direction
 		if facing_direction == "up":
 			anim_name = "sit_up"
 		elif facing_direction == "down":
 			anim_name = "sit_down"
-			
+
 		$AnimatedSprite2D.play(anim_name)
 		return true
 	return false
@@ -406,17 +406,17 @@ func update_animation():
 	else:
 		if abs(velocity.x) > abs(velocity.y):
 			if velocity.x > 0:
-				animated_sprite.play("run_right")
+				animated_sprite.play("walk_right")
 				facing_direction = "right"
 			else:
-				animated_sprite.play("run_left")
+				animated_sprite.play("walk_left")
 				facing_direction = "left"
 		else:
 			if velocity.y > 0:
-				animated_sprite.play("run_down")
+				animated_sprite.play("walk_down")
 				facing_direction = "down"
 			else:
-				animated_sprite.play("run_up")
+				animated_sprite.play("walk_up")
 				facing_direction = "up"
 
 # 移动到椅子并自动坐下

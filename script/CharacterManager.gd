@@ -16,7 +16,16 @@ func _ready():
 	# 延迟获取GodUI引用，确保场景完全加载
 	call_deferred("_init_godui_reference")
 
+# RadialMenu 引用（延迟初始化）
+var _radial_menu: Control = null
+
+
 func _unhandled_input(event):
+	# 右键：弹出圆形菜单
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		_handle_right_click(event)
+		return
+
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		# 将屏幕坐标转换为全局坐标
 		var camera = get_viewport().get_camera_2d()
@@ -76,15 +85,16 @@ func get_nearby_character(character: CharacterBody2D) -> CharacterBody2D:
 	return null
 
 func select_character(character: CharacterBody2D):
+	var cam = get_viewport().get_camera_2d()
+	
 	# 如果点击的是当前选中的角色，则取消选择并回到全局视图
 	if character == current_character:
 		current_character.set_selected(false)
 		current_character = null
 		
 		# 相机回到全局视图
-		var camera = get_viewport().get_camera_2d()
-		if camera and camera.has_method("follow_character"):
-			camera.follow_character(null)
+		if cam and cam.has_method("follow_character"):
+			cam.follow_character(null)
 		
 		# 同步更新GodUI左侧边栏（取消选择）
 		_sync_godui_selection(null)
@@ -98,9 +108,8 @@ func select_character(character: CharacterBody2D):
 	current_character.set_selected(true)
 	
 	# 相机跟随新选中的角色
-	var camera = get_viewport().get_camera_2d()
-	if camera and camera.has_method("follow_character"):
-		camera.follow_character(character)
+	if cam and cam.has_method("follow_character"):
+		cam.follow_character(character)
 	
 	# 同步更新GodUI左侧边栏
 	_sync_godui_selection(character)
@@ -159,3 +168,39 @@ func _sync_godui_selection(character: CharacterBody2D):
 			# 更新角色详情显示
 			if god_ui.has_method("_update_character_detail"):
 				god_ui._update_character_detail()
+
+# 处理右键点击：弹出圆形菜单
+func _handle_right_click(event: InputEventMouseButton) -> void:
+	var camera = get_viewport().get_camera_2d()
+	var click_position = event.position
+	if camera:
+		click_position = get_viewport().get_canvas_transform().affine_inverse() * click_position
+
+	var clicked_character = get_clicked_character(click_position)
+	if not clicked_character:
+		return
+
+	# 初始化 RadialMenu（延迟加载）
+	if not _radial_menu:
+		_init_radial_menu()
+
+	if _radial_menu:
+		# 将角色世界坐标转换为屏幕坐标，使菜单以角色为中心
+		var cam = get_viewport().get_camera_2d()
+		if cam:
+			var screen_pos = cam.unproject_position(clicked_character.global_position)
+			_radial_menu.show_for_character(clicked_character, screen_pos)
+		else:
+			# 无相机时回退到点击位置
+			_radial_menu.show_for_character(clicked_character, event.position)
+
+# 初始化 RadialMenu
+func _init_radial_menu() -> void:
+	var radial_scene = load("res://scene/ui/RadialMenu.tscn")
+	if radial_scene:
+		_radial_menu = radial_scene.instantiate()
+		_radial_menu.hide()
+		get_tree().root.add_child(_radial_menu)
+		print("[CharacterManager] RadialMenu 初始化成功")
+	else:
+		push_error("[CharacterManager] 无法加载 RadialMenu.tscn")
