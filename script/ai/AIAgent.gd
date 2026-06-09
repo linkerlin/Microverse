@@ -542,6 +542,19 @@ func make_decision():
 		_on_decision_request_completed(result, response_code, headers, body, character)
 	)
 	waiting_responses[character.name] = true
+	
+	# 添加超时保护（60 秒）
+	var timeout_timer = get_tree().create_timer(60.0)
+	timeout_timer.timeout.connect(func():
+		if waiting_responses.get(character.name, false):
+			push_error("[AIAgent] %s 请求超时（60秒），使用默认决策" % character.name)
+			waiting_responses[character.name] = false
+			_execute_default_decision(character)
+			current_state = State.IDLE
+			# 清理 HTTPRequest
+			if http_request and is_instance_valid(http_request):
+				http_request.queue_free()
+	)
 
 # 处理Agentic决策API响应
 func _on_decision_request_completed(result, _response_code, headers, body, char_node = null):

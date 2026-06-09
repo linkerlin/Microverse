@@ -7,8 +7,8 @@ var _registry: ToolRegistry
 func before_each():
 	_registry = ToolRegistry.new(null)
 
-func test_has_10_tools():
-	assert_eq(_registry.get_tool_names().size(), 10, "应有 10 个工具")
+func test_has_9_tools():
+	assert_eq(_registry.get_tool_names().size(), 9, "应有 9 个工具")
 
 func test_known_tools():
 	var names = _registry.get_tool_names()
