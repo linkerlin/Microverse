@@ -8,6 +8,11 @@ static var instance = null
 # 当前设置（从SettingsManager获取）
 var current_settings = {}
 
+# Cache 监控统计
+var _cache_stats: Dictionary = {"hits": 0, "misses": 0, "total_tokens_in": 0, "total_tokens_out": 0, "requests": 0}
+var _cost_per_token_in: float = 0.001  # ¥/K tokens, DeepSeek 默认
+var _cost_per_token_out: float = 0.002
+
 # 获取单例实例
 static func get_instance() -> APIManager:
 	if instance == null:
@@ -83,6 +88,90 @@ func generate_dialog(prompt: String, character_name: String = "") -> HTTPRequest
 	print("[APIManager] 创建HTTPRequest节点：", http_request.name)
 	http_request.request(url, headers, HTTPClient.METHOD_POST, data)
 	return http_request
+
+# 生成三段式对话(Context Cache)
+func generate_tiered_dialog(tier1: String, tier2: String, tier3: String, character_name: String = "") -> HTTPRequest:
+	if not is_inside_tree():
+		push_error("APIManager is not properly initialized!")
+		return null
+	
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	
+	var http_request = HTTPRequest.new()
+	http_request.name = "HTTPRequest_Tiered_" + str(Time.get_unix_time_from_system()) + "_" + str(randi())
+	add_child(http_request)
+	
+	http_request.request_completed.connect(func(result, response_code, headers, body):
+		get_tree().create_timer(1.0).timeout.connect(func():
+			if http_request and is_instance_valid(http_request):
+				remove_child(http_request)
+				http_request.queue_free()
+		)
+	)
+	
+	var ai_settings = current_settings
+	if character_name != "":
+		ai_settings = SettingsManager.get_character_ai_settings(character_name)
+		print("[APIManager] Tiered request for ", character_name, " - API:", ai_settings.api_type, " Model:", ai_settings.model)
+	
+	var headers = APIConfig.build_headers(ai_settings.api_type, ai_settings.api_key)
+	var data = JSON.stringify(APIConfig.build_tiered_request(ai_settings.api_type, ai_settings.model, tier1, tier2, tier3))
+	var url = APIConfig.get_url(ai_settings.api_type, ai_settings.model)
+	
+	print("[APIManager] Tiered request to ", ai_settings.api_type, " URL:", url)
+	http_request.request(url, headers, HTTPClient.METHOD_POST, data)
+	_cache_stats.requests += 1
+	return http_request
+
+# 记录 cache 使用情况(从 LLM 响应中提取)
+func log_cache_usage(response_body: Dictionary, api_type: String = "") -> void:
+	var usage = response_body.get("usage", {})
+	_cache_stats.total_tokens_in += int(usage.get("prompt_tokens", 0))
+	_cache_stats.total_tokens_out += int(usage.get("completion_tokens", 0))
+	
+	# 兼容多家 API 的 cache 字段
+	# Anthropic (Claude): cache_read_input_tokens / cache_creation_input_tokens
+	# DeepSeek: prompt_cache_hit_tokens / prompt_cache_miss_tokens
+	# OpenAI: 暂无官方 cache 命中返回字段
+	var hit_tokens = int(usage.get("cache_read_input_tokens", 0))
+	var miss_tokens = int(usage.get("cache_creation_input_tokens", 0))
+	
+	# DeepSeek 格式
+	if hit_tokens == 0 and miss_tokens == 0:
+		hit_tokens = int(usage.get("prompt_cache_hit_tokens", 0))
+		miss_tokens = int(usage.get("prompt_cache_miss_tokens", 0))
+	
+	if hit_tokens > 0:
+		_cache_stats.hits += 1
+	elif miss_tokens > 0:
+		_cache_stats.misses += 1
+	# 若无 cache 字段，则不计入 hit/miss（不惩罚）
+	
+	var total = _cache_stats.hits + _cache_stats.misses
+	if total > 0:
+		print("[APIManager] Cache 命中率: %d/%d (%.1f%%) | 总 token: in=%d out=%d | 预估费用: ¥%.2f" % [
+			_cache_stats.hits, total, 100.0 * _cache_stats.hits / total,
+			_cache_stats.total_tokens_in, _cache_stats.total_tokens_out,
+			_estimate_cost()
+		])
+
+# 获取 cache 统计(给 GodUI 用)
+func get_cache_stats() -> Dictionary:
+	var total = _cache_stats.hits + _cache_stats.misses
+	return {
+		"hits": _cache_stats.hits,
+		"misses": _cache_stats.misses,
+		"hit_rate": 100.0 * _cache_stats.hits / max(total, 1),
+		"total_tokens_in": _cache_stats.total_tokens_in,
+		"total_tokens_out": _cache_stats.total_tokens_out,
+		"requests": _cache_stats.requests,
+		"estimated_cost": _estimate_cost()
+	}
+
+func _estimate_cost() -> float:
+	return _cache_stats.total_tokens_in * _cost_per_token_in / 1000.0 + _cache_stats.total_tokens_out * _cost_per_token_out / 1000.0
 
 # 生成AI决策
 func generate_decision(prompt: String, character_name: String = "") -> HTTPRequest:

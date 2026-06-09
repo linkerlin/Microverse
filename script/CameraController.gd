@@ -1,8 +1,8 @@
 extends Camera2D
 
 @export var follow_speed: float = 5.0  # 相机跟随速度
-@export var zoom_level: float = 0.8    # 默认缩放级别（全局视图，显示更多内容）
-@export var character_zoom: float = 1.5  # 跟随角色时的缩放级别
+@export var zoom_level: float = 1.2    # 默认缩放级别（全局视图，放大 50%）
+@export var character_zoom: float = 2.25  # 跟随角色时的缩放级别（放大 50%）
 @export var drag_speed: float = 1.0  # 拖拽移动的速度
 @export var zoom_speed: float = 0.1  # 滚轮缩放速度
 @export var min_zoom: float = 0.5  # 最小缩放级别

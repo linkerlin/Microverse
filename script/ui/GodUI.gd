@@ -28,10 +28,19 @@ var selected_character = null
 var all_characters = []
 var ui_visible = true
 
+# AI 成本监控标签(动态创建)
+var _cost_label: RichTextLabel = null
+
 func _ready():
+	# 初始化故事背景（默认加载 Office）
+	BackgroundStoryManager.initialize()
+	
 	# 初始隐藏头像动画节点
 	if avatar_sprite:
 		avatar_sprite.visible = false
+	
+	# 创建 AI 成本监控标签
+	_init_cost_monitor()
 	
 	# 连接按钮信号
 	$HBoxContainer/RightPanel/VBoxContainer/ImplantMemoryButton.pressed.connect(_on_implant_memory_pressed)
@@ -108,6 +117,7 @@ func _process(_delta):
 	# 每隔一段时间更新角色列表
 	if Engine.get_process_frames() % 60 == 0:  # 每约1秒检查一次
 		_update_character_lists()
+		_update_cost_monitor()
 
 func _update_character_lists():
 	# 获取所有角色
@@ -308,6 +318,8 @@ func _toggle_ui(show):
 	right_panel.visible = show # 确保右侧面板也能切换
 	toggle_ui_button.visible = true # 总是保持可见
 	toggle_ui_button.text = "隐藏 UI" if show else "显示 UI"
+	if _cost_label:
+		_cost_label.visible = show
 
 func _on_implant_memory_pressed():
 	implant_memory_popup.popup_centered()
@@ -1095,6 +1107,44 @@ func _on_clear_rules_pressed():
 # 刷新按钮点击
 func _on_refresh_background_pressed():
 	_refresh_background_display()
+
+# === AI 成本监控 ===
+
+func _init_cost_monitor():
+	_cost_label = RichTextLabel.new()
+	_cost_label.name = "AICostMonitor"
+	_cost_label.bbcode_enabled = true
+	_cost_label.fit_content = true
+	_cost_label.scroll_following = false
+	_cost_label.custom_minimum_size = Vector2(260, 80)
+	_cost_label.position = Vector2(10, 10)
+	_cost_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	# 半透明背景
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0, 0, 0, 0.75)
+	style.set_corner_radius_all(4)
+	_cost_label.add_theme_stylebox_override("normal", style)
+	_cost_label.add_theme_font_size_override("normal_font_size", 13)
+	# 添加到 left_panel 或根节点
+	var container = $HBoxContainer/LeftPanel
+	if container:
+		container.add_child(_cost_label)
+	else:
+		add_child(_cost_label)
+	_cost_label.visible = ui_visible
+
+func _update_cost_monitor():
+	if not _cost_label or not is_instance_valid(_cost_label):
+		return
+	var api = get_node_or_null("/root/APIManager")
+	if not api:
+		return
+	var stats = api.get_cache_stats()
+	var bbcode = "[b]AI 成本监控[/b]\n"
+	bbcode += "请求: %d | Cache: %.0f%%\n" % [stats.requests, stats.hit_rate]
+	bbcode += "Token: in=%d out=%d\n" % [stats.total_tokens_in, stats.total_tokens_out]
+	bbcode += "预估费用: ¥%.3f" % stats.estimated_cost
+	_cost_label.text = bbcode
 
 # 清空角色选择（供CharacterManager调用）
 func clear_character_selection():

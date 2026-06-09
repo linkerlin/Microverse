@@ -75,7 +75,7 @@ static func _initialize():
 		"DeepSeek",
 		"DeepSeek",
 		"https://api.deepseek.com/v1/chat/completions",
-		["deepseek-chat"],
+		["deepseek-v4-flash", "deepseek-chat"],
 		true,
 		{"Content-Type": "application/json", "Authorization": "Bearer {api_key}"},
 		"openai",
@@ -219,6 +219,49 @@ static func build_request_data(api_type: String, model: String, prompt: String) 
 					"role": "user",
 					"content": prompt
 				}]
+			}
+		_:
+			return {}
+
+# 构建三段式请求数据(Context Cache)
+static func build_tiered_request(api_type: String, model: String, tier1: String, tier2: String, tier3: String) -> Dictionary:
+	_initialize()
+	var provider = get_provider(api_type)
+	
+	match provider.request_format:
+		"ollama":
+			return {
+				"model": model,
+				"prompt": tier1 + "\n\n" + tier2 + "\n\n" + tier3,
+				"stream": false
+			}
+		"openai":
+			return {
+				"model": model,
+				"messages": [
+					{"role": "system", "content": tier1 + "\n\n" + tier2},
+					{"role": "user", "content": tier3}
+				]
+			}
+		"claude":
+			return {
+				"model": model,
+				"max_tokens": 1024,
+				"system": [
+					{"type": "text", "text": tier1, "cache_control": {"type": "ephemeral"}},
+					{"type": "text", "text": tier2, "cache_control": {"type": "ephemeral"}}
+				],
+				"messages": [
+					{"role": "user", "content": tier3}
+				]
+			}
+		"gemini":
+			return {
+				"model": "models/" + model,
+				"contents": [
+					{"role": "user", "parts": [{"text": tier2 + "\n\n" + tier3}]}
+				],
+				"systemInstruction": {"parts": [{"text": tier1}]}
 			}
 		_:
 			return {}

@@ -12,8 +12,8 @@ const CHARACTER_AI_CONFIG_FILE = "user://character_ai_settings.cfg"
 
 # 当前设置（默认AI设置）
 var current_settings = {
-	"api_type": "Ollama",
-	"model": "qwen2.5:1.5b",
+	"api_type": "DeepSeek",
+	"model": "deepseek-v4-flash",
 	"api_key": "",
 	"show_ai_model_label": true,
 	# 显示设置
@@ -40,9 +40,17 @@ func _load_api_config():
 		api_types = APIConfig.get_api_types()
 		_api_config_loaded = true
 
+# 从环境变量解析 API Key（配置优先，否则尝试环境变量）
+func _resolve_api_key(settings: Dictionary) -> Dictionary:
+	if settings.get("api_key", "") == "":
+		var env_key = OS.get_environment("DEEPSEEK_API_KEY")
+		if env_key != "":
+			settings["api_key"] = env_key
+	return settings
+
 # 获取当前设置
 func get_settings() -> Dictionary:
-	return current_settings.duplicate()
+	return _resolve_api_key(current_settings.duplicate())
 
 # 更新设置并通知所有监听者
 func update_settings(new_settings: Dictionary):
@@ -104,10 +112,12 @@ func load_settings():
 
 # 获取角色AI设置（优先使用角色独立设置，没有则返回默认设置）
 func get_character_ai_settings(character_name: String) -> Dictionary:
+	var settings: Dictionary
 	if character_ai_settings.has(character_name):
-		return character_ai_settings[character_name].duplicate()
+		settings = character_ai_settings[character_name].duplicate()
 	else:
-		return current_settings.duplicate()
+		settings = current_settings.duplicate()
+	return _resolve_api_key(settings)
 
 # 设置角色AI配置
 func set_character_ai_settings(character_name: String, settings: Dictionary):

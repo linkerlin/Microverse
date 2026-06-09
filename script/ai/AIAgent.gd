@@ -9,7 +9,9 @@ const PERCEPTION_RADIUS = 200
 enum State {
 	IDLE,
 	MOVING,
-	TALKING
+	TALKING,
+	LLM_BUSY,
+	EXECUTING_ACTIONS
 }
 
 # 当前状态
@@ -34,6 +36,11 @@ var decision_timer: Timer
 @onready var room_manager = get_node("/root/Office/RoomManager")
 
 func _ready():
+	# 初始化 Agentic 子系统
+	_sandbox = AgentSandbox.new()
+	_sandbox.setup(character, room_manager)
+	_tool_registry = ToolRegistry.new(_sandbox)
+
 	# 创建并配置决策定时器
 	decision_timer = Timer.new()
 	decision_timer.wait_time = 60  # 每1分钟进行一次决策
@@ -263,6 +270,10 @@ func get_object_info(obj: Node2D) -> String:
 # 标记是否正在等待API响应
 var waiting_responses = {}
 
+# Agentic 子系统(Gen 2)
+var _sandbox: AgentSandbox = null
+var _tool_registry: ToolRegistry = null
+
 # 获取角色详细状态信息
 func get_character_status_info(char_node = null) -> String:
 	# 使用传入的角色节点，如果没有则使用当前角色
@@ -484,7 +495,7 @@ func _generate_random_task(character_node):
 		"completed": false
 	}
 
-# 生成决策并执行行为
+# 生成决策并执行行为(Gen 2: Agentic tool call + 三段式 prompt)
 func make_decision():
 	# 如果正在等待API响应，跳过本次决策
 	if character.name in waiting_responses and waiting_responses[character.name]:
@@ -499,54 +510,29 @@ func make_decision():
 	# 检查并初始化任务系统
 	await _check_and_initialize_tasks()
 	
-	# 生成场景描述
-	var scene_description = generate_scene_description()
-	print("[AIAgent] %s 的场景描述：\n%s" % [character.name, scene_description])
+	# 刷新 sandbox 状态
+	_sandbox.setup(character, room_manager)
 	
-	# 获取角色人设
-	var personality = CharacterPersonality.get_personality(character.name)
+	# 三段式 prompt
+	var tiers = CharacterPromptBuilder.build_tiered(character, _tool_registry)
 	
-	# 获取角色详细状态信息
-	var status_info = get_character_status_info(character)
+	current_state = State.LLM_BUSY
+	print("[AIAgent] %s 开始Agentic决策(TIER 1:%d chars, TIER 2:%d chars, TIER 3:%d chars)" % [
+		character.name, tiers.tier1.length(), tiers.tier2.length(), tiers.tier3.length()
+	])
 	
-	# 获取任务信息
-	var task_info = get_character_task_info(character)
-	
-	# 构建prompt
-	var prompt = "你是一个办公室员工，名字是%s。你的职位是：%s。你的性格是：%s。你的说话风格是：%s。你的工作职责是：%s。你的工作习惯是：%s。" % [
-		character.name,
-		personality["position"],
-		personality["personality"],
-		personality["speaking_style"],
-		personality["work_duties"],
-		personality["work_habits"]
-	]
-	
-	# 添加公司基本信息和员工名单信息
-	prompt += get_company_basic_info()
-	prompt += get_company_employees_info()
-	prompt += status_info  # 添加详细状态信息
-	prompt += task_info   # 添加任务信息
-	prompt += "\n" + scene_description
-	prompt += "\n请根据你的职位、性格、当前个人状态（包括心情、健康、财务状况）、记忆、情感关系、当前任务列表以及当前环境信息，综合考虑在这个情境下最合理的行动。"
-	prompt += "\n特别注意：你的决策应该受到以下因素影响："
-	prompt += "\n- 你的心情状态可能影响你的行为倾向"
-	prompt += "\n- 你的健康状况可能限制你的活动能力"
-	prompt += "\n- 你的财务状况可能影响你对金钱相关话题的敏感度"
-	prompt += "\n- 你的记忆会影响你对当前情况的判断"
-	prompt += "\n- 你对其他同事的情感关系会影响你是否愿意与他们互动"
-	prompt += "\n- 你应该优先考虑完成渴望程度高的任务"
-	prompt += "\n- 你的行动应该与当前最重要的任务相关"
-	prompt += "\n\n根据以上所有信息，你想要采取什么行动？请从以下选项中选择一个："
-	prompt += "\n1. 调整任务（重新安排或修改当前的任务优先级）"
-	prompt += "\n2. 继续当前任务（执行当前最重要的任务）"
-	prompt += "\n请只回复数字1或2，不要有任何其他文字。"
-	
-	# 使用APIManager生成AI决策
+	# 使用三段式接口发送请求
 	var character_name = character.name if character else "Unknown"
-	var http_request = await api_manager.generate_dialog(prompt, character_name)
+	var http_request = await api_manager.generate_tiered_dialog(
+		tiers.tier1, tiers.tier2, tiers.tier3, character_name
+	)
 	
-	# 为每个角色创建唯一的回调连接
+	if not http_request:
+		print("[AIAgent] %s HTTPRequest创建失败,使用默认决策" % character.name)
+		_execute_default_decision(character)
+		current_state = State.IDLE
+		return
+	
 	# 断开之前可能存在的连接，避免重复连接
 	if http_request.request_completed.is_connected(_on_decision_request_completed):
 		http_request.request_completed.disconnect(_on_decision_request_completed)
@@ -557,7 +543,7 @@ func make_decision():
 	)
 	waiting_responses[character.name] = true
 
-# 处理API响应
+# 处理Agentic决策API响应
 func _on_decision_request_completed(result, _response_code, headers, body, char_node = null):
 	# 使用传入的角色节点，如果没有则使用当前角色
 	var target_character = char_node if char_node else character
@@ -567,34 +553,118 @@ func _on_decision_request_completed(result, _response_code, headers, body, char_
 	if result != HTTPRequest.RESULT_SUCCESS:
 		print("[AIAgent] %s 的HTTP请求失败，错误码：%s，使用默认决策" % [target_character.name, result])
 		_execute_default_decision(target_character)
+		current_state = State.IDLE
 		return
 	
 	var response = JSON.parse_string(body.get_string_from_utf8())
 	if not response:
 		print("[AIAgent] %s 的JSON解析失败，使用默认决策" % target_character.name)
 		_execute_default_decision(target_character)
+		current_state = State.IDLE
 		return
+	
+	# 记录 cache 使用情况（传入 api_type 以兼容多厂商）
+	api_manager.log_cache_usage(response, api_manager.current_settings.api_type)
 	
 	# 使用APIConfig统一解析响应
-	var decision = APIConfig.parse_response(api_manager.current_settings.api_type, response)
-	if decision == "":
+	var text = APIConfig.parse_response(api_manager.current_settings.api_type, response)
+	if text == "":
 		print("[AIAgent] %s 的API响应解析失败，使用默认决策" % target_character.name)
 		_execute_default_decision(target_character)
+		current_state = State.IDLE
 		return
 	
-	decision = decision.strip_edges()
+	text = text.strip_edges()
 	
-	# 根据决策执行行为
-	print("[AIAgent] %s 的决策结果：%s" % [target_character.name, decision])
-	match decision:
-		"1":  # 调整任务
-			print("[AIAgent] %s 决定调整任务" % target_character.name)
-			await _adjust_tasks(target_character)
-		"2":  # 继续当前任务
-			print("[AIAgent] %s 决定继续当前任务" % target_character.name)
-			await _continue_current_task(target_character)
-		_:
-			print("[AIAgent] 无效的决策：", decision)
+	# Agentic 解析:提取 #REASONING# 和 #ACTIONS#
+	var parsed = _parse_agentic_response(text)
+	var reasoning = parsed.get("reasoning", "")
+	var actions = parsed.get("actions", [])
+	
+	print("[AIAgent] %s Agentic决策: reasoning=%s, actions=%d个" % [
+		target_character.name, reasoning.left(100), actions.size()
+	])
+	
+	# 推理写记忆
+	if not reasoning.is_empty():
+		MemoryManager.add_memory(
+			target_character, "思考:" + reasoning,
+			MemoryManager.MemoryType.PERSONAL,
+			MemoryManager.MemoryImportance.LOW
+		)
+	
+	# 串行执行 actions
+	if actions.size() > 0:
+		current_state = State.EXECUTING_ACTIONS
+		for action in actions:
+			if not action is Dictionary:
+				continue
+			var tool_name = action.get("name", "")
+			# 兼容 "args" 和 "arguments" 两种字段名
+			var tool_args = action.get("args", action.get("arguments", {}))
+			if tool_name.is_empty():
+				continue
+			# 如果 args 里没有必需参数,跳过并记录
+			if tool_args.is_empty():
+				print("[AIAgent] %s 工具%s的args为空,跳过" % [target_character.name, tool_name])
+				continue
+			print("[AIAgent] %s 执行工具:%s args:%s" % [target_character.name, tool_name, str(tool_args)])
+			var exec_result = _tool_registry.execute(tool_name, tool_args)
+			if not exec_result.get("ok", false):
+				print("[AIAgent] %s 工具%s失败:%s" % [target_character.name, tool_name, exec_result.get("error", "")])
+				MemoryManager.add_memory(target_character,
+					"尝试 %s 失败:%s" % [tool_name, exec_result.get("error", "")],
+					MemoryManager.MemoryType.PERSONAL,
+					MemoryManager.MemoryImportance.LOW
+				)
+			else:
+				print("[AIAgent] %s 工具%s成功:%s" % [target_character.name, tool_name, str(exec_result)])
+	
+	current_state = State.IDLE
+
+# 解析 Agentic 响应(提取 #REASONING# 和 #ACTIONS# 段)
+func _parse_agentic_response(text: String) -> Dictionary:
+	var reasoning = ""
+	var actions = []
+	
+	# 提取 #REASONING# 段
+	var reasoning_text = _extract_section(text, "REASONING")
+	if not reasoning_text.is_empty():
+		reasoning = reasoning_text
+	
+	# 提取 #ACTIONS# 段(必须是 JSON)
+	var actions_text = _extract_section(text, "ACTIONS")
+	if not actions_text.is_empty():
+		var parsed = JSON.parse_string(actions_text)
+		if parsed != null and parsed is Array:
+			actions = parsed
+		elif actions_text.begins_with("["):
+			parsed = JSON.parse_string(actions_text)
+			if parsed != null and parsed is Array:
+				actions = parsed
+	
+	# 兼容:如果没找到段落标记,尝试直接解析整个文本为 JSON
+	if reasoning.is_empty() and actions.is_empty():
+		var direct = JSON.parse_string(text)
+		if direct != null and direct is Array:
+			actions = direct
+		elif direct is Dictionary:
+			if direct.has("reasoning"):
+				reasoning = str(direct.reasoning)
+			if direct.has("actions"):
+				var a = direct.actions
+				if a is Array:
+					actions = a
+	
+	return {"reasoning": reasoning, "actions": actions}
+
+func _extract_section(text: String, marker: String) -> String:
+	var pattern = "#%s#\\s*([\\s\\S]*?)(?=#\\w+#|$)" % marker
+	var regex = RegEx.create_from_string(pattern)
+	var match = regex.search(text)
+	if match:
+		return match.get_string(1).strip_edges()
+	return ""
 
 # 聊天中的决策
 func make_conversation_decision():

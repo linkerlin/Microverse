@@ -67,9 +67,8 @@ func load_settings():
 		print("[AIModelLabel] 无法找到SettingsManager，使用默认设置")
 
 func update_display_text():
-	# 格式化显示文本
-	# var display_text = current_settings.api_type + ": " + current_settings.model
-	var display_text = current_settings.model
+	# 显示角色名，若无法获取则回退到模型名
+	var display_text = character_name if character_name != "" else current_settings.model
 	text = display_text
 	
 	# 动态调整偏移量以确保文本居中
